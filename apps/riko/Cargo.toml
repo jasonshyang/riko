@@ -1,0 +1,6 @@
+[package]
+name = "riko"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

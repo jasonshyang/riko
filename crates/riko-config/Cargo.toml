@@ -1,0 +1,6 @@
+[package]
+name = "riko-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

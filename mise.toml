@@ -1,0 +1,19 @@
+[tasks.fmt]
+description = "Format the workspace"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check formatting without modifying files"
+run = "cargo fmt --all -- --check"
+
+[tasks.clippy]
+description = "Run clippy with warnings as errors"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo test --workspace"
+
+[tasks.precommit]
+description = "Run fmt-check, clippy, and tests together"
+depends = ["fmt-check", "clippy", "test"]

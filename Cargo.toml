@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+    "apps/*",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+riko-utils = { path = "crates/riko-utils" }
+riko-core = { path = "crates/riko-core" }
+riko-llm = { path = "crates/riko-llm" }
+riko-context = { path = "crates/riko-context" }
+riko-tools = { path = "crates/riko-tools" }
+riko-config = { path = "crates/riko-config" }
+riko-agent = { path = "crates/riko-agent" }
+riko-engine = { path = "crates/riko-engine" }
