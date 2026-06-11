@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::{Content, ModelRef, ToolCallId};
@@ -7,7 +8,7 @@ use crate::{Content, ModelRef, ToolCallId};
 /// This is the wire-shaped unit a provider consumes and the payload a message-kind
 /// workspace item carries. Identity, ordering, timestamps, and pin/hide metadata live
 /// on the item that wraps the turn, not here.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<Content>,
@@ -18,7 +19,7 @@ pub struct Message {
 /// Only the three roles that reach a provider exist here. Local-only content (system
 /// prompt, notes, summaries, loaded files) is a distinct workspace item kind, not a role,
 /// so rendering never has to strip anything out.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Role {
     /// Human input.
     User,
@@ -29,7 +30,7 @@ pub enum Role {
 }
 
 /// Token counts a provider reports for a single assistant turn.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     /// Prompt tokens charged at full price.
     pub input_tokens: u32,
@@ -58,7 +59,7 @@ impl Usage {
 }
 
 /// Why an assistant turn stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
     /// Model produced an end-of-turn signal naturally.
     Stop,

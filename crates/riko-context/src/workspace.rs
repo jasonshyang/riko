@@ -2,10 +2,12 @@ use riko_core::{Prompt, Result, RikoError, ToolDescriptor};
 use riko_utils::Timestamp;
 use smol_str::SmolStr;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::branch::Branch;
+use crate::store::OperationSink;
 use crate::{BranchId, BranchInfo, Item, ItemId, ItemMeta, ItemPayload, Operation};
 
 const EVENT_CAPACITY: usize = 256;
@@ -16,6 +18,7 @@ const EVENT_CAPACITY: usize = 256;
 pub struct Workspace {
     state: parking_lot::Mutex<State>,
     events: broadcast::Sender<WorkspaceEvent>,
+    sink: Option<parking_lot::Mutex<OperationSink>>,
 }
 
 /// Durable change broadcast after an [`Operation`](crate::Operation) settles. Carries ids
@@ -38,10 +41,33 @@ pub enum WorkspaceEvent {
 
 impl Workspace {
     pub fn new() -> Self {
-        let active = Branch::root(BranchId::fresh());
+        Self::from_parts(State::with_root(BranchId::fresh()), None)
+    }
+
+    /// Open a persistent workspace at `path`, replaying an existing log or starting a fresh
+    /// one. Subsequent operations append to the log.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if path.exists() {
+            let (root, ops) = crate::store::read_log(path)?;
+            let mut state = State::with_root(root);
+            for op in &ops {
+                state.apply(op)?;
+            }
+            Ok(Self::from_parts(state, Some(OperationSink::open_existing(path)?)))
+        } else {
+            let root = BranchId::fresh();
+            let sink = OperationSink::create(path, root.clone())?;
+            Ok(Self::from_parts(State::with_root(root), Some(sink)))
+        }
+    }
+    fn from_parts(state: State, sink: Option<OperationSink>) -> Self {
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let state = State { active, inactive: HashMap::new(), log: Vec::new() };
-        Self { state: parking_lot::Mutex::new(state), events }
+        Self {
+            state: parking_lot::Mutex::new(state),
+            events,
+            sink: sink.map(parking_lot::Mutex::new),
+        }
     }
 
     /// Receive change events as the workspace mutates.
@@ -108,9 +134,11 @@ impl Workspace {
         Ok(id)
     }
 
-    /// The single funnel for durable mutation: apply the op, log it, broadcast the change.
     pub fn apply(&self, op: Operation) -> Result<()> {
-        let event = self.state.lock().apply(op)?;
+        let event = self.state.lock().apply(&op)?;
+        if let Some(sink) = &self.sink {
+            sink.lock().append(&op)?;
+        }
         let _ = self.events.send(event);
         Ok(())
     }
@@ -161,12 +189,15 @@ impl Default for Workspace {
 struct State {
     active: Branch,
     inactive: HashMap<BranchId, Branch>,
-    log: Vec<Operation>,
 }
 
 impl State {
-    fn apply(&mut self, op: Operation) -> Result<WorkspaceEvent> {
-        let event = match &op {
+    fn with_root(root: BranchId) -> Self {
+        Self { active: Branch::root(root), inactive: HashMap::new() }
+    }
+
+    fn apply(&mut self, op: &Operation) -> Result<WorkspaceEvent> {
+        let event = match op {
             Operation::Add { item } => {
                 let id = item.id.clone();
                 self.active.items.push(item.clone());
@@ -257,7 +288,6 @@ impl State {
                 }
             }
         };
-        self.log.push(op);
         Ok(event)
     }
 
@@ -362,14 +392,6 @@ mod tests {
             Ok(WorkspaceEvent::ItemAdded { id: got, .. }) => assert_eq!(got, id),
             other => panic!("expected ItemAdded, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn operations_are_logged() {
-        let ws = Workspace::new();
-        let id = ws.add(sys("x")).unwrap();
-        ws.set_meta(&id, ItemMeta { pinned: true, ..Default::default() }).unwrap();
-        assert_eq!(ws.state.lock().log.len(), 2);
     }
 
     #[test]

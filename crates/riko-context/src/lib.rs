@@ -4,6 +4,7 @@ pub mod operation;
 pub mod workspace;
 
 mod render;
+mod store;
 
 pub use branch::*;
 pub use item::*;

@@ -4,3 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+riko-agent.workspace = true
+riko-config.workspace = true
+riko-core.workspace = true
+riko-context.workspace = true
+riko-tools.workspace = true
+riko-llm.workspace = true
+smol_str.workspace = true

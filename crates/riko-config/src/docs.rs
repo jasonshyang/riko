@@ -2,7 +2,7 @@ use std::path::Path;
 
 /// Filenames searched in each ancestor directory, in precedence order: when more than one
 /// exists in a directory, the first listed wins.
-const FILENAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "RICO.md"];
+const FILENAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "RIKO.md"];
 
 /// Hard cap on ancestors walked — workspace + ~7 parents covers any realistic tree.
 const MAX_DEPTH: usize = 8;
@@ -42,11 +42,11 @@ mod tests {
         let nested = dir.path().join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(dir.path().join("a").join("AGENTS.md"), "parent agents").unwrap();
-        std::fs::write(nested.join("RICO.md"), "workspace rico").unwrap();
+        std::fs::write(nested.join("RIKO.md"), "workspace riko").unwrap();
         let docs = discover_project_docs(&nested).unwrap();
-        assert!(docs.contains("workspace rico"));
+        assert!(docs.contains("workspace riko"));
         assert!(docs.contains("parent agents"));
-        assert!(docs.contains("RICO.md"));
+        assert!(docs.contains("RIKO.md"));
         assert!(docs.contains("AGENTS.md"));
     }
 

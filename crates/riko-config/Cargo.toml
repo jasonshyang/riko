@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 riko-core.workspace = true
+riko-utils.workspace = true
+riko-context.workspace = true
 serde.workspace = true
 smol_str.workspace = true
 toml.workspace = true

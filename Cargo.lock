@@ -624,7 +624,9 @@ dependencies = [
 name = "riko-config"
 version = "0.1.0"
 dependencies = [
+ "riko-context",
  "riko-core",
+ "riko-utils",
  "serde",
  "smol_str",
  "tempfile",
@@ -639,6 +641,7 @@ dependencies = [
  "riko-core",
  "riko-utils",
  "serde",
+ "serde_json",
  "smol_str",
  "tokio",
 ]
@@ -658,6 +661,15 @@ dependencies = [
 [[package]]
 name = "riko-engine"
 version = "0.1.0"
+dependencies = [
+ "riko-agent",
+ "riko-config",
+ "riko-context",
+ "riko-core",
+ "riko-llm",
+ "riko-tools",
+ "smol_str",
+]
 
 [[package]]
 name = "riko-llm"

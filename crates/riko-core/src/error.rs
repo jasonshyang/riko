@@ -26,6 +26,10 @@ pub enum RikoError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// JSON encoding or decoding failure.
+    #[error("serde error: {0}")]
+    Serde(#[from] serde_json::Error),
+
     /// The operation observed its cancellation token and stopped.
     #[error("cancelled")]
     Cancelled,

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::{BranchId, Item, ItemId, ItemMeta, ItemPayload};
@@ -9,7 +10,7 @@ use crate::{BranchId, Item, ItemId, ItemMeta, ItemPayload};
 /// Every operation is fully resolved — ids and timestamps are minted by the caller-facing
 /// helpers *before* the op is built — so the operation log replays deterministically and
 /// [`Workspace::apply`](crate::Workspace::apply) never mints anything itself.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     /// Append an item to the active branch.
     Add { item: Arc<Item> },

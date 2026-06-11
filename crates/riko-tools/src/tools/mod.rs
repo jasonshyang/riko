@@ -16,3 +16,15 @@ fn schema_for<T: schemars::JsonSchema>() -> riko_core::ToolSchema {
     let schema = schemars::SchemaGenerator::default().into_root_schema_for::<T>();
     riko_core::ToolSchema::from_value(schema.to_value())
 }
+
+impl crate::ToolRegistry {
+    pub fn register_defaults(&mut self) {
+        self.register(read::ReadTool);
+        self.register(write::WriteTool);
+        self.register(edit::EditTool);
+        self.register(bash::BashTool);
+        self.register(ls::LsTool);
+        self.register(grep::GrepTool);
+        self.register(find::FindTool);
+    }
+}
