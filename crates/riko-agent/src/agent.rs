@@ -146,12 +146,25 @@ impl Agent {
                 }
             }
         }
-        Ok(StreamOutcome::Completed { tool_calls: Vec::new() })
+
+        // The stream ended without the Done/Error terminal the provider contract promises.
+        // Surface it as a failure rather than silently reporting a clean, empty stop with no
+        // assistant item recorded.
+        let _ = self.events.send(AgentEvent::Error {
+            message: "provider stream ended without a terminal event".into(),
+        });
+        Ok(StreamOutcome::Failed)
     }
 
-    /// Run each requested tool in order, appending its result to the workspace.
+    /// Run each requested tool in order, appending its result to the workspace. Stops before
+    /// the next call once the run is aborted, so a multi-tool batch doesn't keep dispatching
+    /// after cancellation; the run loop then settles as [`EndReason::Aborted`].
     async fn dispatch_tools(&self, calls: &[ToolCall], cancel: &CancellationToken) -> Result<()> {
         for call in calls {
+            if cancel.is_cancelled() {
+                break;
+            }
+
             let _ = self.events.send(AgentEvent::ToolStarted {
                 call_id: call.id.clone(),
                 tool: call.name.clone(),
