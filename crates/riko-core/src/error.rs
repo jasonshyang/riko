@@ -1,11 +1,19 @@
 use thiserror::Error;
 
-/// Crate-wide `Result` bound to [`RicoError`].
-pub type Result<T> = std::result::Result<T, RicoError>;
+/// Crate-wide `Result` bound to [`RikoError`].
+pub type Result<T> = std::result::Result<T, RikoError>;
 
 /// Top-level error returned by fallible engine APIs.
 #[derive(Debug, Error)]
-pub enum RicoError {
+pub enum RikoError {
+    /// Settings malformed, missing a required value, or otherwise invalid.
+    #[error("configuration error: {0}")]
+    Config(String),
+
+    /// Lookup of a named resource (model, tool, item, …) failed.
+    #[error("not found: {0}")]
+    NotFound(String),
+
     /// Tool execution failed.
     #[error("tool error: {0}")]
     Tool(String),
