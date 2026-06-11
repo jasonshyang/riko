@@ -18,3 +18,19 @@ riko-tools = { path = "crates/riko-tools" }
 riko-config = { path = "crates/riko-config" }
 riko-agent = { path = "crates/riko-agent" }
 riko-engine = { path = "crates/riko-engine" }
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_json = "1.0.150"
+
+# Structure
+bytes = { version = "1.11.1", features = ["serde"] }
+smol_str = { version = "0.3.6", features = ["serde"] }
+
+# Error handling
+thiserror = "2.0.18"
+anyhow = "1.0.102"
+
+# MISC
+uuid = { version = "1.23.2", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }

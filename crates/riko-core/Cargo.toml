@@ -4,3 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+riko-utils.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smol_str.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
