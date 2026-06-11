@@ -2,12 +2,22 @@ use smol_str::SmolStr;
 
 use crate::{Content, ModelRef, ToolCallId};
 
+/// A single conversation turn: who produced it and the content blocks they emitted.
+///
+/// This is the wire-shaped unit a provider consumes and the payload a message-kind
+/// workspace item carries. Identity, ordering, timestamps, and pin/hide metadata live
+/// on the item that wraps the turn, not here.
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<Content>,
 }
 
+/// Who produced a [`Message`], carrying the role-specific data that turn needs.
+///
+/// Only the three roles that reach a provider exist here. Local-only content (system
+/// prompt, notes, summaries, loaded files) is a distinct workspace item kind, not a role,
+/// so rendering never has to strip anything out.
 #[derive(Debug, Clone)]
 pub enum Role {
     /// Human input.
@@ -18,6 +28,7 @@ pub enum Role {
     ToolResult { call_id: ToolCallId, tool: SmolStr, is_error: bool },
 }
 
+/// Token counts a provider reports for a single assistant turn.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Usage {
     /// Prompt tokens charged at full price.
