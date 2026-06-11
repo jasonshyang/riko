@@ -10,6 +10,10 @@ pub enum RikoError {
     #[error("configuration error: {0}")]
     Config(String),
 
+    /// Caller supplied an argument the callee cannot accept.
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+
     /// Lookup of a named resource (model, tool, item, …) failed.
     #[error("not found: {0}")]
     NotFound(String),

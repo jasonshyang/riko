@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::{Item, ItemId, ItemMeta, ItemPayload};
+use smol_str::SmolStr;
+
+use crate::{BranchId, Item, ItemId, ItemMeta, ItemPayload};
 
 /// The only way to durably mutate a workspace.
 ///
@@ -17,4 +19,12 @@ pub enum Operation {
     Drop { id: ItemId },
     /// Replace an item's metadata.
     SetMeta { id: ItemId, meta: ItemMeta },
+    /// Create a new branch off the active one, sharing its items.
+    Fork { new: BranchId, label: Option<SmolStr> },
+    /// Check out another branch.
+    Switch { target: BranchId },
+    /// Append a copy of one item from another branch onto the active branch.
+    Merge { from: BranchId, item: ItemId },
+    /// Delete an inactive branch.
+    DeleteBranch { target: BranchId },
 }
