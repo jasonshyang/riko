@@ -16,7 +16,9 @@ use riko_utils::RunGuard;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::{AgentEvent, EndReason, ToolContext, ToolOutput, ToolRegistry};
+use crate::{
+    AgentEvent, EndReason, PendingQueue, QueueKind, ToolContext, ToolOutput, ToolRegistry,
+};
 
 const EVENT_CAPACITY: usize = 256;
 
@@ -46,6 +48,10 @@ pub struct Agent {
     events: broadcast::Sender<AgentEvent>,
     running: AtomicBool,
     cancel: parking_lot::Mutex<CancellationToken>,
+    /// Messages to merge in at the next turn boundary (mid-run course correction).
+    steering: PendingQueue,
+    /// Messages to deliver after a natural stop, continuing the run instead of ending it.
+    follow_up: PendingQueue,
 }
 
 impl Agent {
@@ -60,9 +66,32 @@ impl Agent {
 
     /// Add a user turn to the workspace, then run.
     pub async fn prompt(&self, text: impl Into<String>) -> Result<()> {
-        let message = Message { role: Role::User, content: vec![Content::text(text)] };
-        self.workspace.add(ItemPayload::Message(message))?;
+        self.workspace.add(ItemPayload::Message(Self::user_message(text)))?;
         self.run().await
+    }
+
+    /// Queue a message to merge onto the workspace at the next turn boundary, steering a run
+    /// already in progress. It lands before the next LLM call; if the agent is idle, it joins
+    /// the first turn of the next [`run`](Self::run).
+    pub fn steer(&self, text: impl Into<String>) {
+        self.steering.push(Self::user_message(text));
+    }
+
+    /// Queue a message to deliver after the run would otherwise stop, continuing it instead of
+    /// ending. A follow-up only fires on a natural stop — an aborted or failed run leaves it
+    /// queued for next time.
+    pub fn follow_up(&self, text: impl Into<String>) {
+        self.follow_up.push(Self::user_message(text));
+    }
+
+    /// Discard any queued steering messages.
+    pub fn clear_steering(&self) {
+        self.steering.clear();
+    }
+
+    /// Discard any queued follow-up messages.
+    pub fn clear_follow_up(&self) {
+        self.follow_up.clear();
     }
 
     /// Abort the current run, if any. A later [`run`](Self::run) gets a fresh token.
@@ -100,11 +129,34 @@ impl Agent {
             if cancel.is_cancelled() {
                 return Ok(EndReason::Aborted);
             }
+            self.drain(&self.steering, QueueKind::Steering)?;
             match self.run_turn(cancel).await? {
-                TurnOutcome::Done(reason) => return Ok(reason),
                 TurnOutcome::Tools(calls) => self.dispatch_tools(&calls, cancel).await?,
+                // A natural stop ends the run only if nothing is queued to follow up with;
+                // otherwise the queued input becomes the next turn. Abort/failure never
+                // triggers a follow-up.
+                TurnOutcome::Done(EndReason::Stopped) => {
+                    if self.drain(&self.follow_up, QueueKind::FollowUp)? == 0 {
+                        return Ok(EndReason::Stopped);
+                    }
+                }
+                TurnOutcome::Done(reason) => return Ok(reason),
             }
         }
+    }
+
+    /// Drain a pending queue onto the workspace as user items, emitting a [`QueueDrained`]
+    /// event per message. Returns how many were added.
+    ///
+    /// [`QueueDrained`]: AgentEvent::QueueDrained
+    fn drain(&self, queue: &PendingQueue, kind: QueueKind) -> Result<usize> {
+        let pending = queue.drain();
+        let count = pending.len();
+        for message in pending {
+            let id = self.workspace.add(ItemPayload::Message(message))?;
+            let _ = self.events.send(AgentEvent::QueueDrained { queue: kind, id });
+        }
+        Ok(count)
     }
 
     async fn run_turn(&self, cancel: &CancellationToken) -> Result<TurnOutcome> {
@@ -210,6 +262,11 @@ impl Agent {
             content,
         }
     }
+
+    /// Build a fresh `User`-role turn carrying one text block.
+    fn user_message(text: impl Into<String>) -> Message {
+        Message { role: Role::User, content: vec![Content::text(text)] }
+    }
 }
 
 #[derive(Default)]
@@ -269,6 +326,8 @@ impl AgentBuilder {
             events,
             running: AtomicBool::new(false),
             cancel: parking_lot::Mutex::new(CancellationToken::new()),
+            steering: PendingQueue::new(),
+            follow_up: PendingQueue::new(),
         })
     }
 
@@ -345,6 +404,16 @@ mod tests {
             .model(test_model())
             .build()
             .unwrap()
+    }
+
+    fn text_of(payload: &ItemPayload) -> &str {
+        match payload {
+            ItemPayload::Message(Message { content, .. }) => match content.first() {
+                Some(Content::Text(text)) => &text.text,
+                _ => panic!("expected a leading text block"),
+            },
+            other => panic!("expected a message item, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -493,6 +562,125 @@ mod tests {
         assert!(matches!(
             &items[2].payload,
             ItemPayload::Message(Message { role: Role::ToolResult { is_error: true, .. }, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn steering_is_drained_onto_the_workspace_before_the_turn() {
+        let workspace = Arc::new(Workspace::new());
+        let mock = MockProvider::for_api(Api::AnthropicMessages);
+        mock.append_text("ok");
+        let agent = agent_with(mock, workspace.clone());
+        workspace.add(user("start")).unwrap();
+        agent.steer("actually, do this instead");
+        let mut events = agent.subscribe();
+
+        agent.run().await.unwrap();
+
+        // user("start"), the steering user turn, then the assistant reply.
+        let items = workspace.items();
+        assert_eq!(items.len(), 3);
+        assert!(matches!(
+            &items[1].payload,
+            ItemPayload::Message(Message { role: Role::User, .. })
+        ));
+        assert_eq!(text_of(&items[1].payload), "actually, do this instead");
+
+        let mut drained = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, AgentEvent::QueueDrained { queue: QueueKind::Steering, .. }) {
+                drained = true;
+            }
+        }
+        assert!(drained, "expected a QueueDrained(Steering) event");
+    }
+
+    #[tokio::test]
+    async fn follow_up_continues_the_run_after_a_natural_stop() {
+        let workspace = Arc::new(Workspace::new());
+        let mock = MockProvider::for_api(Api::AnthropicMessages);
+        mock.append_text("first answer");
+        mock.append_text("second answer");
+        let agent = agent_with(mock, workspace.clone());
+        workspace.add(user("start")).unwrap();
+        agent.follow_up("and now the follow-up");
+        let mut events = agent.subscribe();
+
+        agent.run().await.unwrap();
+
+        // user, assistant(first), follow-up user, assistant(second) — the follow-up drove a
+        // second turn instead of letting the run end.
+        let items = workspace.items();
+        assert_eq!(items.len(), 4);
+        assert_eq!(text_of(&items[2].payload), "and now the follow-up");
+        assert_eq!(text_of(&items[3].payload), "second answer");
+
+        let mut drained = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, AgentEvent::QueueDrained { queue: QueueKind::FollowUp, .. }) {
+                drained = true;
+            }
+        }
+        assert!(drained, "expected a QueueDrained(FollowUp) event");
+    }
+
+    #[tokio::test]
+    async fn cleared_follow_up_does_not_fire() {
+        let workspace = Arc::new(Workspace::new());
+        let mock = MockProvider::for_api(Api::AnthropicMessages);
+        mock.append_text("only answer");
+        let agent = agent_with(mock, workspace.clone());
+        workspace.add(user("start")).unwrap();
+        agent.follow_up("queued, then cancelled");
+        agent.clear_follow_up();
+
+        agent.run().await.unwrap();
+
+        // No follow-up turn: just the user prompt and the single assistant answer.
+        assert_eq!(workspace.items().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn steering_queued_mid_run_lands_before_the_next_turn() {
+        // Turn 1 ends in a tool call so the loop continues; steering queued while turn 1
+        // streams must be merged in before turn 2's LLM call.
+        let workspace = Arc::new(Workspace::new());
+        let mock = MockProvider::for_api(Api::AnthropicMessages)
+            .with_step_delay(Duration::from_millis(30));
+        mock.append(MockScript::tool_call("echo", json!({ "msg": "go" })));
+        mock.append_text("done after steering");
+        let mut providers = ProviderRegistry::new();
+        providers.register(mock);
+        let mut tools = ToolRegistry::default();
+        tools.register(EchoTool::new());
+        let agent = Arc::new(
+            Agent::builder()
+                .workspace(workspace.clone())
+                .providers(Arc::new(providers))
+                .model(test_model())
+                .tools(Arc::new(tools))
+                .build()
+                .unwrap(),
+        );
+        workspace.add(user("start")).unwrap();
+
+        let runner = {
+            let agent = Arc::clone(&agent);
+            tokio::spawn(async move { agent.run().await })
+        };
+        // Steer well before turn 1's ~30ms stream completes, so it is queued by the time the
+        // loop reaches the steering drain ahead of turn 2.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        agent.steer("steered mid-run");
+        runner.await.unwrap().unwrap();
+
+        // user, assistant(tool call), tool result, steering user turn, assistant(text).
+        let items = workspace.items();
+        assert_eq!(items.len(), 5);
+        assert_eq!(text_of(&items[3].payload), "steered mid-run");
+        assert!(matches!(
+            &items[4].payload,
+            ItemPayload::Message(Message { role: Role::Assistant { .. }, .. })
         ));
     }
 }

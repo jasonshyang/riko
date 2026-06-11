@@ -20,12 +20,23 @@ pub enum AgentEvent {
     ToolStarted { call_id: ToolCallId, tool: SmolStr },
     /// A tool call finished.
     ToolEnded { call_id: ToolCallId, is_error: bool },
+    /// A queued steering or follow-up message was drained onto the workspace as a user item.
+    QueueDrained { queue: QueueKind, id: ItemId },
     /// A turn finished.
     TurnEnded,
     /// The run finished.
     RunEnded { reason: EndReason },
     /// A non-fatal error surfaced mid-run (e.g. a provider error ending the turn).
     Error { message: String },
+}
+
+/// Which queue a drained message came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueKind {
+    /// Drained before a turn, to steer a run already in progress.
+    Steering,
+    /// Drained after a natural stop, to continue the run instead of ending it.
+    FollowUp,
 }
 
 /// Why a run ended.
