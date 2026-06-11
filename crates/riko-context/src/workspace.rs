@@ -1,4 +1,4 @@
-use riko_core::{Result, RikoError};
+use riko_core::{Prompt, Result, RikoError, ToolDescriptor};
 use riko_utils::Timestamp;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -90,6 +90,11 @@ impl Workspace {
         let event = self.state.lock().apply(op)?;
         let _ = self.events.send(event);
         Ok(())
+    }
+
+    /// Render the active branch into the wire payload for the given tools.
+    pub fn render(&self, tools: Vec<ToolDescriptor>) -> Prompt {
+        crate::render::render(&self.items(), tools)
     }
 }
 
