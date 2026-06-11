@@ -1,5 +1,7 @@
 use riko_context::ItemId;
+use riko_core::ToolCallId;
 use riko_llm::ProviderEvent;
+use smol_str::SmolStr;
 
 /// Run-lifecycle and ephemeral streaming events emitted by the agent. Durable item changes
 /// (the assistant turn landing, tool results appended) arrive on the workspace's event stream;
@@ -14,6 +16,10 @@ pub enum AgentEvent {
     Streaming(ProviderEvent),
     /// An item the agent just finalized into the workspace (assistant turn or tool result).
     Settled { id: ItemId },
+    /// A tool call has begun executing.
+    ToolStarted { call_id: ToolCallId, tool: SmolStr },
+    /// A tool call finished.
+    ToolEnded { call_id: ToolCallId, is_error: bool },
     /// A turn finished.
     TurnEnded,
     /// The run finished.

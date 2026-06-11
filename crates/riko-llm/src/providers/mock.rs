@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use async_stream::stream;
 use parking_lot::Mutex;
-use riko_core::{Content, Message, ModelRef, Prompt, Role, StopReason, Usage};
+use riko_core::{
+    Content, Message, ModelRef, Prompt, Role, StopReason, ToolCall, ToolCallId, Usage,
+};
+use smol_str::SmolStr;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -94,6 +97,7 @@ impl MockProvider {
             let mut text = String::new();
             let mut idx = 0u32;
             let mut text_open = false;
+            let mut content: Vec<Content> = Vec::new();
 
             for step in script.steps {
                 if cancel.is_cancelled() {
@@ -115,9 +119,16 @@ impl MockProvider {
                     MockStep::EndText => {
                         if text_open {
                             yield ProviderEvent::TextEnd { idx };
+                            content.push(Content::text(std::mem::take(&mut text)));
                             text_open = false;
                             idx += 1;
                         }
+                    }
+                    MockStep::ToolCall { id, name, arguments } => {
+                        yield ProviderEvent::ToolCallStart { idx, call_id: id.clone(), name: name.clone() };
+                        yield ProviderEvent::ToolCallEnd { idx, args: arguments.clone() };
+                        content.push(Content::ToolCall(ToolCall { id, name, arguments }));
+                        idx += 1;
                     }
                     MockStep::Error(message) => {
                         yield ProviderEvent::Error { reason: ErrorReason::Permanent, message };
@@ -127,9 +138,9 @@ impl MockProvider {
             }
             if text_open {
                 yield ProviderEvent::TextEnd { idx };
+                content.push(Content::text(text));
             }
 
-            let content = if text.is_empty() { Vec::new() } else { vec![Content::text(text)] };
             let message = Message {
                 role: Role::Assistant { model, usage: Usage::default(), stop },
                 content,
@@ -156,6 +167,18 @@ impl MockScript {
     pub fn just_text(text: impl Into<String>) -> Self {
         Self { steps: vec![MockStep::Text(text.into()), MockStep::EndText], stop: StopReason::Stop }
     }
+
+    /// One tool call, stopping for tool use.
+    pub fn tool_call(name: impl Into<SmolStr>, arguments: serde_json::Value) -> Self {
+        Self {
+            steps: vec![MockStep::ToolCall {
+                id: ToolCallId::fresh(),
+                name: name.into(),
+                arguments,
+            }],
+            stop: StopReason::ToolUse,
+        }
+    }
 }
 
 /// One scripted streaming step.
@@ -165,6 +188,8 @@ pub enum MockStep {
     Text(String),
     /// Close the open text block.
     EndText,
+    /// Emit a complete tool call.
+    ToolCall { id: ToolCallId, name: SmolStr, arguments: serde_json::Value },
     /// Abort the stream with a permanent error.
     Error(String),
 }
@@ -257,5 +282,19 @@ mod tests {
         let events = collect(&provider).await;
         assert!(matches!(events.last(), Some(ProviderEvent::Done { .. })));
         assert_eq!(handle.pending(), 0);
+    }
+
+    #[tokio::test]
+    async fn scripted_tool_call_appears_in_done_message() {
+        let provider = MockProvider::for_api(Api::AnthropicMessages);
+        provider.append(MockScript::tool_call("read", serde_json::json!({ "path": "/x" })));
+        let events = collect(&provider).await;
+        match events.last().unwrap() {
+            ProviderEvent::Done { stop, message } => {
+                assert_eq!(*stop, StopReason::ToolUse);
+                assert!(matches!(message.content.first(), Some(Content::ToolCall(_))));
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
     }
 }

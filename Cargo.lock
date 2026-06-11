@@ -473,6 +473,8 @@ dependencies = [
  "riko-core",
  "riko-llm",
  "riko-utils",
+ "serde_json",
+ "smol_str",
  "tokio",
  "tokio-util",
 ]

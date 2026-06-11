@@ -1,11 +1,14 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use futures::StreamExt;
 use riko_context::{ItemPayload, Workspace};
-use riko_core::{Content, Message, Result, RikoError, Role};
+use riko_core::{Content, Message, Result, RikoError, Role, ToolCall};
 use riko_llm::{
     ErrorReason, ModelSpec, ProviderEvent, ProviderRegistry, ProviderStream, StreamOptions,
 };
@@ -13,9 +16,22 @@ use riko_utils::RunGuard;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::{AgentEvent, EndReason};
+use crate::{AgentEvent, EndReason, ToolContext, ToolOutput, ToolRegistry};
 
 const EVENT_CAPACITY: usize = 256;
+
+/// What a turn produced: a terminal reason, or tool calls to dispatch before the next turn.
+enum TurnOutcome {
+    Done(EndReason),
+    Tools(Vec<ToolCall>),
+}
+
+/// What consuming a provider stream produced.
+enum StreamOutcome {
+    Completed { tool_calls: Vec<ToolCall> },
+    Aborted,
+    Failed,
+}
 
 /// Drives turns against a shared [`Workspace`]. The user and the agent are peer mutators of the
 /// same workspace; the agent's job is to render it, stream a response, and record the result as
@@ -25,6 +41,8 @@ pub struct Agent {
     providers: Arc<ProviderRegistry>,
     model: ModelSpec,
     options: StreamOptions,
+    tools: Arc<ToolRegistry>,
+    root: PathBuf,
     events: broadcast::Sender<AgentEvent>,
     running: AtomicBool,
     cancel: parking_lot::Mutex<CancellationToken>,
@@ -62,7 +80,7 @@ impl Agent {
         let _guard = RunGuard::from(&self.running);
         let cancel = self.reset_cancel();
         let _ = self.events.send(AgentEvent::RunStarted);
-        let outcome = self.run_turn(&cancel).await;
+        let outcome = self.run_loop(&cancel).await;
         let reason = match &outcome {
             Ok(reason) => *reason,
             Err(_) => EndReason::Failed,
@@ -77,41 +95,106 @@ impl Agent {
         token
     }
 
-    async fn run_turn(&self, cancel: &CancellationToken) -> Result<EndReason> {
+    async fn run_loop(&self, cancel: &CancellationToken) -> Result<EndReason> {
+        loop {
+            if cancel.is_cancelled() {
+                return Ok(EndReason::Aborted);
+            }
+            match self.run_turn(cancel).await? {
+                TurnOutcome::Done(reason) => return Ok(reason),
+                TurnOutcome::Tools(calls) => self.dispatch_tools(&calls, cancel).await?,
+            }
+        }
+    }
+
+    async fn run_turn(&self, cancel: &CancellationToken) -> Result<TurnOutcome> {
         let _ = self.events.send(AgentEvent::TurnStarted);
-        let prompt = self.workspace.render(Vec::new());
+        let prompt = self.workspace.render(self.tools.descriptors());
         let provider = self.providers.get(&self.model.api)?;
         let mut stream =
             provider.stream(&self.model, prompt, self.options.clone(), cancel.clone()).await?;
-        let reason = self.consume(&mut stream).await?;
+        let outcome = self.consume(&mut stream).await?;
         let _ = self.events.send(AgentEvent::TurnEnded);
-        Ok(reason)
+        Ok(match outcome {
+            StreamOutcome::Completed { tool_calls } if tool_calls.is_empty() => {
+                TurnOutcome::Done(EndReason::Stopped)
+            }
+            StreamOutcome::Completed { tool_calls } => TurnOutcome::Tools(tool_calls),
+            StreamOutcome::Aborted => TurnOutcome::Done(EndReason::Aborted),
+            StreamOutcome::Failed => TurnOutcome::Done(EndReason::Failed),
+        })
     }
 
-    async fn consume(&self, stream: &mut ProviderStream) -> Result<EndReason> {
+    async fn consume(&self, stream: &mut ProviderStream) -> Result<StreamOutcome> {
         while let Some(event) = stream.next().await {
             match event {
                 ProviderEvent::Done { message, .. } => {
+                    let tool_calls = Self::tool_calls_of(&message);
                     let id = self.workspace.add(ItemPayload::Message(*message))?;
                     let _ = self.events.send(AgentEvent::Settled { id });
-                    return Ok(EndReason::Stopped);
+                    return Ok(StreamOutcome::Completed { tool_calls });
                 }
                 ProviderEvent::Error { reason, message } => {
                     let _ = self.events.send(AgentEvent::Error { message });
-                    return Ok(Self::end_reason_for(reason));
+                    return Ok(match reason {
+                        ErrorReason::Cancelled => StreamOutcome::Aborted,
+                        _ => StreamOutcome::Failed,
+                    });
                 }
                 delta => {
                     let _ = self.events.send(AgentEvent::Streaming(delta));
                 }
             }
         }
-        Ok(EndReason::Stopped)
+        Ok(StreamOutcome::Completed { tool_calls: Vec::new() })
     }
 
-    fn end_reason_for(reason: ErrorReason) -> EndReason {
-        match reason {
-            ErrorReason::Cancelled => EndReason::Aborted,
-            _ => EndReason::Failed,
+    /// Run each requested tool in order, appending its result to the workspace.
+    async fn dispatch_tools(&self, calls: &[ToolCall], cancel: &CancellationToken) -> Result<()> {
+        for call in calls {
+            let _ = self.events.send(AgentEvent::ToolStarted {
+                call_id: call.id.clone(),
+                tool: call.name.clone(),
+            });
+            let result = self.run_tool(call, cancel).await;
+            let is_error = matches!(&result.role, Role::ToolResult { is_error: true, .. });
+            let id = self.workspace.add(ItemPayload::Message(result))?;
+            let _ = self.events.send(AgentEvent::Settled { id });
+            let _ = self.events.send(AgentEvent::ToolEnded { call_id: call.id.clone(), is_error });
+        }
+        Ok(())
+    }
+
+    async fn run_tool(&self, call: &ToolCall, cancel: &CancellationToken) -> Message {
+        let outcome = match self.tools.get(&call.name) {
+            Some(tool) => {
+                let ctx = ToolContext { root: self.root.clone() };
+                tool.run(call.clone(), ctx, cancel.clone()).await
+            }
+            None => Err(RikoError::NotFound(format!("tool `{}` is not registered", call.name))),
+        };
+        Self::tool_result(call, outcome)
+    }
+
+    fn tool_calls_of(message: &Message) -> Vec<ToolCall> {
+        message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                Content::ToolCall(call) => Some(call.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tool_result(call: &ToolCall, outcome: Result<ToolOutput>) -> Message {
+        let (content, is_error) = match outcome {
+            Ok(output) => (output.content, false),
+            Err(error) => (vec![Content::text(error.to_string())], true),
+        };
+        Message {
+            role: Role::ToolResult { call_id: call.id.clone(), tool: call.name.clone(), is_error },
+            content,
         }
     }
 }
@@ -122,6 +205,8 @@ pub struct AgentBuilder {
     providers: Option<Arc<ProviderRegistry>>,
     model: Option<ModelSpec>,
     options: Option<StreamOptions>,
+    tools: Option<Arc<ToolRegistry>>,
+    root: Option<PathBuf>,
 }
 
 impl AgentBuilder {
@@ -145,6 +230,17 @@ impl AgentBuilder {
         self
     }
 
+    pub fn tools(mut self, tools: Arc<ToolRegistry>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Directory tools resolve relative paths against. Defaults to the current directory.
+    pub fn root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.root = Some(root.into());
+        self
+    }
+
     pub fn build(self) -> Result<Agent> {
         let workspace = self.workspace.ok_or_else(|| Self::missing("workspace"))?;
         let providers = self.providers.ok_or_else(|| Self::missing("providers"))?;
@@ -155,6 +251,8 @@ impl AgentBuilder {
             providers,
             model,
             options: self.options.unwrap_or_default(),
+            tools: self.tools.unwrap_or_default(),
+            root: self.root.unwrap_or_else(|| PathBuf::from(".")),
             events,
             running: AtomicBool::new(false),
             cancel: parking_lot::Mutex::new(CancellationToken::new()),
@@ -168,13 +266,47 @@ impl AgentBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::{Tool, ToolFuture};
+
     use super::*;
-    use riko_core::StopReason;
+    use riko_core::{StopReason, ToolDescriptor};
     use riko_llm::{
         Api,
         mock::{MockProvider, MockScript, MockStep},
     };
+    use serde_json::json;
     use std::time::Duration;
+
+    struct EchoTool {
+        descriptor: ToolDescriptor,
+    }
+
+    impl EchoTool {
+        fn new() -> Self {
+            Self {
+                descriptor: ToolDescriptor {
+                    name: "echo".into(),
+                    description: "echo the call arguments".into(),
+                    schema: Default::default(),
+                },
+            }
+        }
+    }
+
+    impl Tool for EchoTool {
+        fn descriptor(&self) -> &ToolDescriptor {
+            &self.descriptor
+        }
+
+        fn run<'a>(
+            &'a self,
+            call: ToolCall,
+            _ctx: ToolContext,
+            _cancel: CancellationToken,
+        ) -> ToolFuture<'a> {
+            Box::pin(async move { Ok(ToolOutput::text(format!("echo: {}", call.arguments))) })
+        }
+    }
 
     fn test_model() -> ModelSpec {
         ModelSpec::builder()
@@ -300,5 +432,54 @@ mod tests {
             }
         }
         assert_eq!(reason, Some(EndReason::Aborted));
+    }
+
+    #[tokio::test]
+    async fn dispatches_a_tool_then_continues() {
+        let workspace = Arc::new(Workspace::new());
+        let mock = MockProvider::for_api(Api::AnthropicMessages);
+        mock.append(MockScript::tool_call("echo", json!({ "msg": "hi" })));
+        mock.append_text("all done");
+        let mut providers = ProviderRegistry::new();
+        providers.register(mock);
+        let mut tools = ToolRegistry::default();
+        tools.register(EchoTool::new());
+        let agent = Agent::builder()
+            .workspace(workspace.clone())
+            .providers(Arc::new(providers))
+            .model(test_model())
+            .tools(Arc::new(tools))
+            .build()
+            .unwrap();
+        workspace.add(user("use echo")).unwrap();
+
+        agent.run().await.unwrap();
+
+        // user, assistant(tool call), tool result, assistant(text)
+        let items = workspace.items();
+        assert_eq!(items.len(), 4);
+        assert!(matches!(
+            &items[2].payload,
+            ItemPayload::Message(Message { role: Role::ToolResult { is_error: false, .. }, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_becomes_an_error_result() {
+        let workspace = Arc::new(Workspace::new());
+        let mock = MockProvider::for_api(Api::AnthropicMessages);
+        mock.append(MockScript::tool_call("ghost", json!({})));
+        mock.append_text("recovered");
+        let agent = agent_with(mock, workspace.clone());
+        workspace.add(user("go")).unwrap();
+
+        agent.run().await.unwrap();
+
+        let items = workspace.items();
+        assert_eq!(items.len(), 4);
+        assert!(matches!(
+            &items[2].payload,
+            ItemPayload::Message(Message { role: Role::ToolResult { is_error: true, .. }, .. })
+        ));
     }
 }
