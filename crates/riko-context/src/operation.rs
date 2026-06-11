@@ -27,4 +27,6 @@ pub enum Operation {
     Merge { from: BranchId, item: ItemId },
     /// Delete an inactive branch.
     DeleteBranch { target: BranchId },
+    /// Replace a set of items with a single summary item, inserted where the range began.
+    Summarize { replace: Vec<ItemId>, summary: Arc<Item> },
 }

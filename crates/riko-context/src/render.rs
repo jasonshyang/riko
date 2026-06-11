@@ -20,6 +20,9 @@ pub(crate) fn render(items: &[Arc<Item>], tools: Vec<ToolDescriptor>) -> Prompt 
         }
         match &item.payload {
             ItemPayload::System { tag, text } => append_section(&mut system, tag.as_ref(), text),
+            ItemPayload::Summary { text } => {
+                append_section(&mut system, Some(&SmolStr::new_static("summary")), text)
+            }
             ItemPayload::Message(message) => messages.push(message.clone()),
         }
     }

@@ -25,6 +25,8 @@ pub enum ItemPayload {
     Message(Message),
     /// Text folded into the system prompt, optionally wrapped in a named section.
     System { tag: Option<SmolStr>, text: String },
+    /// A condensed summary that replaced a range of items during compaction.
+    Summary { text: String },
 }
 
 /// Mutable per-item annotations.

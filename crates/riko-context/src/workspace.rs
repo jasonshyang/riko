@@ -33,6 +33,7 @@ pub enum WorkspaceEvent {
     BranchSwitched { from: BranchId, to: BranchId },
     BranchMerged { into: BranchId, from: BranchId, item: ItemId },
     BranchDeleted { branch: BranchId },
+    ItemSummarized { branch: BranchId, summary: ItemId, replaced: Vec<ItemId> },
 }
 
 impl Workspace {
@@ -90,6 +91,21 @@ impl Workspace {
     /// Replace an item's metadata.
     pub fn set_meta(&self, id: &ItemId, meta: ItemMeta) -> Result<()> {
         self.apply(Operation::SetMeta { id: id.clone(), meta })
+    }
+
+    /// Replace a set of items with one summary item (inserted where the earliest replaced item
+    /// was). The summary text is produced upstream — e.g. by an LLM-backed summarizer — and
+    /// this records the result as one durable operation.
+    pub fn summarize(&self, replace: &[ItemId], text: String) -> Result<ItemId> {
+        let summary = Item {
+            id: ItemId::fresh(),
+            created: Timestamp::now(),
+            payload: ItemPayload::Summary { text },
+            meta: ItemMeta::default(),
+        };
+        let id = summary.id.clone();
+        self.apply(Operation::Summarize { replace: replace.to_vec(), summary: Arc::new(summary) })?;
+        Ok(id)
     }
 
     /// The single funnel for durable mutation: apply the op, log it, broadcast the change.
@@ -222,6 +238,24 @@ impl State {
                 self.inactive.remove(target).ok_or_else(|| Self::branch_not_found(target))?;
                 WorkspaceEvent::BranchDeleted { branch: target.clone() }
             }
+            Operation::Summarize { replace, summary } => {
+                let mut positions = Vec::with_capacity(replace.len());
+                for id in replace {
+                    positions
+                        .push(self.active.position(id).ok_or_else(|| Self::item_not_found(id))?);
+                }
+                let insert_at = positions.iter().copied().min().unwrap_or(self.active.items.len());
+                positions.sort_unstable();
+                for &pos in positions.iter().rev() {
+                    self.active.items.remove(pos);
+                }
+                self.active.items.insert(insert_at, summary.clone());
+                WorkspaceEvent::ItemSummarized {
+                    branch: self.active.id.clone(),
+                    summary: summary.id.clone(),
+                    replaced: replace.clone(),
+                }
+            }
         };
         self.log.push(op);
         Ok(event)
@@ -251,10 +285,16 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    use riko_core::{Content, Message, Role};
+
     use super::*;
 
     fn sys(text: &str) -> ItemPayload {
         ItemPayload::System { tag: None, text: text.into() }
+    }
+
+    fn msg(text: &str) -> ItemPayload {
+        ItemPayload::Message(Message { role: Role::User, content: vec![Content::text(text)] })
     }
 
     fn text_of(item: &Item) -> &str {
@@ -334,16 +374,28 @@ mod tests {
 
     #[test]
     fn render_projects_active_branch() {
-        use riko_core::{Content, Message, Role};
         let ws = Workspace::new();
         ws.add(sys("you are riko")).unwrap();
-        ws.add(ItemPayload::Message(Message {
-            role: Role::User,
-            content: vec![Content::text("hi")],
-        }))
-        .unwrap();
+        ws.add(msg("hi")).unwrap();
         let prompt = ws.render(Vec::new());
         assert_eq!(prompt.system, "you are riko");
+        assert_eq!(prompt.messages.len(), 1);
+    }
+
+    #[test]
+    fn summarize_replaces_a_range_with_one_summary() {
+        let ws = Workspace::new();
+        let a = ws.add(msg("turn one")).unwrap();
+        let b = ws.add(msg("turn two")).unwrap();
+        let keep = ws.add(msg("turn three")).unwrap();
+        let summary = ws.summarize(&[a, b], "earlier: two turns".into()).unwrap();
+        let items = ws.items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, summary);
+        assert_eq!(items[1].id, keep);
+        let prompt = ws.render(Vec::new());
+        assert!(prompt.system.contains("<summary>"));
+        assert!(prompt.system.contains("earlier: two turns"));
         assert_eq!(prompt.messages.len(), 1);
     }
 
