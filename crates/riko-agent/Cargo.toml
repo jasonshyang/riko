@@ -4,3 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+riko-core.workspace = true
+riko-context.workspace = true
+riko-utils.workspace = true
+riko-llm.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
