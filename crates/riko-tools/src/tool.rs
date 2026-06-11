@@ -3,6 +3,8 @@ use smol_str::SmolStr;
 use std::{collections::HashMap, path::PathBuf, pin::Pin, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
+use crate::FileAccess;
+
 /// Boxed future returned by [`Tool::run`].
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>>;
 
@@ -27,6 +29,8 @@ pub trait Tool: Send + Sync + 'static {
 pub struct ToolContext {
     /// Directory that tools resolve relative paths against.
     pub root: PathBuf,
+    /// Per-run record of reads, so `edit` can enforce read-before-edit.
+    pub file_access: FileAccess,
 }
 
 /// A tool's successful output.

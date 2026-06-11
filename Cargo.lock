@@ -531,6 +531,7 @@ dependencies = [
 name = "riko-tools"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "riko-core",
  "smol_str",
  "tokio-util",

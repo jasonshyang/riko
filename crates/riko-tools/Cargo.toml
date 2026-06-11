@@ -7,3 +7,4 @@ edition.workspace = true
 smol_str.workspace = true
 riko-core.workspace = true
 tokio-util.workspace = true
+parking_lot.workspace = true

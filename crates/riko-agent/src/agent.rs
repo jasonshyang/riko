@@ -12,7 +12,7 @@ use riko_core::{Content, Message, Result, RikoError, Role, ToolCall};
 use riko_llm::{
     ErrorReason, ModelSpec, ProviderEvent, ProviderRegistry, ProviderStream, StreamOptions,
 };
-use riko_tools::{ToolContext, ToolOutput, ToolRegistry};
+use riko_tools::{FileAccess, ToolContext, ToolOutput, ToolRegistry};
 use riko_utils::RunGuard;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -47,6 +47,8 @@ pub struct Agent {
     events: broadcast::Sender<AgentEvent>,
     running: AtomicBool,
     cancel: parking_lot::Mutex<CancellationToken>,
+    /// Per-run read-set shared with each tool call; reset at the start of every run.
+    file_access: FileAccess,
     /// Messages to merge in at the next turn boundary (mid-run course correction).
     steering: PendingQueue,
     /// Messages to deliver after a natural stop, continuing the run instead of ending it.
@@ -106,6 +108,7 @@ impl Agent {
             return Err(RikoError::InvalidArgument("agent is already running".into()));
         }
         let _guard = RunGuard::from(&self.running);
+        self.file_access.reset();
         let cancel = self.reset_cancel();
         let _ = self.events.send(AgentEvent::RunStarted);
         let outcome = self.run_loop(&cancel).await;
@@ -232,7 +235,8 @@ impl Agent {
     async fn run_tool(&self, call: &ToolCall, cancel: &CancellationToken) -> Message {
         let outcome = match self.tools.get(&call.name) {
             Some(tool) => {
-                let ctx = ToolContext { root: self.root.clone() };
+                let ctx =
+                    ToolContext { root: self.root.clone(), file_access: self.file_access.clone() };
                 tool.run(call.clone(), ctx, cancel.clone()).await
             }
             None => Err(RikoError::NotFound(format!("tool `{}` is not registered", call.name))),
@@ -325,6 +329,7 @@ impl AgentBuilder {
             events,
             running: AtomicBool::new(false),
             cancel: parking_lot::Mutex::new(CancellationToken::new()),
+            file_access: FileAccess::new(),
             steering: PendingQueue::new(),
             follow_up: PendingQueue::new(),
         })
