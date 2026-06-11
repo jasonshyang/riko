@@ -25,4 +25,8 @@ pub enum RikoError {
     /// Filesystem or other std::io failure.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// The operation observed its cancellation token and stopped.
+    #[error("cancelled")]
+    Cancelled,
 }

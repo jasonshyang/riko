@@ -8,7 +8,7 @@ use crate::FileAccess;
 /// Boxed future returned by [`Tool::run`].
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>>;
 
-/// A tool the agent can dispatch on the model's behalf. Implemented by `rico-tools`; the trait
+/// A tool the agent can dispatch on the model's behalf. Implemented by `riko-tools`; the trait
 /// is held as a registry trait object, so it stays dyn-compatible (hence the boxed future).
 pub trait Tool: Send + Sync + 'static {
     /// What the model sees: name, description, and input schema.

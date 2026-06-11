@@ -34,9 +34,62 @@ impl FileAccess {
     }
 }
 
+/// Resolve `path` against `root` in a way that tolerates the most common path confusion small
+/// models make: writing `/src` to mean "the `src/` dir inside the workspace" instead of the
+/// filesystem-absolute `/src`.
+///
+/// Rules:
+/// 1. Relative paths (`src`, `./src`, `tests/data`) → joined onto `root`.
+/// 2. Absolute paths that exist as-is on disk → used unchanged (so `/etc/hosts` keeps working
+///    for callers who genuinely mean it).
+/// 3. Absolute paths that **don't** exist as-is, with their leading `/` stripped, matched
+///    against `root` → use the workspace-relative version.
+/// 4. Anything else → pass through the original; the caller surfaces the filesystem error with
+///    [`describe_path_problem`] attached.
+pub(crate) fn resolve_path(root: &Path, path: &Path) -> PathBuf {
+    if !path.is_absolute() {
+        return root.join(path);
+    }
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    if let Ok(stripped) = path.strip_prefix("/") {
+        let candidate = root.join(stripped);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Build a hint that tool error messages append when an absolute-looking path fails — gently
+/// steering the model toward workspace-relative usage on the retry.
+pub(crate) fn describe_path_problem(root: &Path, attempted: &Path) -> String {
+    if !attempted.is_absolute() {
+        return String::new();
+    }
+    if let Ok(stripped) = attempted.strip_prefix("/") {
+        let candidate = root.join(stripped);
+        if candidate.exists() {
+            return format!(
+                " — hint: `{}` is filesystem-absolute. Did you mean the workspace-relative \
+                 `{}`?",
+                attempted.display(),
+                stripped.display()
+            );
+        }
+    }
+    format!(
+        " — hint: paths are workspace-relative by default. The workspace is `{}`. Avoid \
+         leading-slash paths unless you really mean a filesystem-absolute target.",
+        root.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use riko_core::Content;
+    use tempfile::TempDir;
 
     use crate::ToolOutput;
 
@@ -71,5 +124,48 @@ mod tests {
     fn text_output_is_one_text_block() {
         let out = ToolOutput::text("hi");
         assert_eq!(out.content, vec![Content::text("hi")]);
+    }
+
+    #[test]
+    fn relative_path_joins_root() {
+        let root = PathBuf::from("/work");
+        assert_eq!(resolve_path(&root, Path::new("src/lib.rs")), PathBuf::from("/work/src/lib.rs"));
+    }
+
+    #[test]
+    fn existing_absolute_path_passes_through() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("file.txt"), "x").unwrap();
+        let root = PathBuf::from("/some/other/workspace");
+        let abs = temp.path().join("file.txt");
+        assert_eq!(resolve_path(&root, &abs), abs);
+    }
+
+    #[test]
+    fn missing_absolute_falls_back_to_relative_when_that_exists() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir(temp.path().join("src")).unwrap();
+        assert_eq!(resolve_path(temp.path(), Path::new("/src")), temp.path().join("src"));
+    }
+
+    #[test]
+    fn missing_absolute_with_no_match_returns_original() {
+        let temp = TempDir::new().unwrap();
+        let abs = Path::new("/definitely/not/here");
+        assert_eq!(resolve_path(temp.path(), abs), PathBuf::from("/definitely/not/here"));
+    }
+
+    #[test]
+    fn describe_problem_is_empty_for_relative_path() {
+        let root = PathBuf::from("/work");
+        assert!(describe_path_problem(&root, Path::new("src/lib.rs")).is_empty());
+    }
+
+    #[test]
+    fn describe_problem_suggests_relative_when_match_exists() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir(temp.path().join("src")).unwrap();
+        let hint = describe_path_problem(temp.path(), Path::new("/src"));
+        assert!(hint.contains("workspace-relative"), "got: {hint}");
     }
 }

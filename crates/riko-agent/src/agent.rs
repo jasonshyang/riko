@@ -413,7 +413,7 @@ mod tests {
     fn text_of(payload: &ItemPayload) -> &str {
         match payload {
             ItemPayload::Message(Message { content, .. }) => match content.first() {
-                Some(Content::Text(text)) => &text.text,
+                Some(Content::Text(text)) => text,
                 _ => panic!("expected a leading text block"),
             },
             other => panic!("expected a message item, got {other:?}"),

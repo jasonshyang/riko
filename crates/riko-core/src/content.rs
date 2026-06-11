@@ -6,7 +6,7 @@ use crate::ToolCallId;
 /// One block inside a [`crate::Message`]'s content array.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Content {
-    Text(Text),
+    Text(String),
     Image(Image),
     Thinking(Thinking),
     ToolCall(ToolCall),
@@ -14,13 +14,8 @@ pub enum Content {
 
 impl Content {
     pub fn text(content: impl Into<String>) -> Self {
-        Self::Text(Text { text: content.into() })
+        Self::Text(content.into())
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Text {
-    pub text: String,
 }
 
 /// Inline image content: raw bytes plus a MIME type.
