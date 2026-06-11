@@ -472,6 +472,7 @@ dependencies = [
  "riko-context",
  "riko-core",
  "riko-llm",
+ "riko-tools",
  "riko-utils",
  "serde_json",
  "smol_str",
@@ -529,6 +530,11 @@ dependencies = [
 [[package]]
 name = "riko-tools"
 version = "0.1.0"
+dependencies = [
+ "riko-core",
+ "smol_str",
+ "tokio-util",
+]
 
 [[package]]
 name = "riko-utils"

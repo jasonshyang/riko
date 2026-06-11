@@ -12,13 +12,12 @@ use riko_core::{Content, Message, Result, RikoError, Role, ToolCall};
 use riko_llm::{
     ErrorReason, ModelSpec, ProviderEvent, ProviderRegistry, ProviderStream, StreamOptions,
 };
+use riko_tools::{ToolContext, ToolOutput, ToolRegistry};
 use riko_utils::RunGuard;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    AgentEvent, EndReason, PendingQueue, QueueKind, ToolContext, ToolOutput, ToolRegistry,
-};
+use crate::{AgentEvent, EndReason, PendingQueue, QueueKind};
 
 const EVENT_CAPACITY: usize = 256;
 
@@ -338,7 +337,7 @@ impl AgentBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Tool, ToolFuture};
+    use riko_tools::{Tool, ToolFuture};
 
     use super::*;
     use riko_core::{StopReason, ToolDescriptor};
