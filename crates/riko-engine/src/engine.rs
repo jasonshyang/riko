@@ -9,15 +9,16 @@ use std::{
     sync::Arc,
 };
 
-use crate::ModelRoute;
+use crate::{ModelRoute, provider::default_registry};
 
-/// The handle a frontend holds. It bundles the two peer mutators of one shared workspace — the
-/// [`Workspace`] (Read / Mutate / Subscribe) and the [`Agent`] that drives turns against it
-/// (Drive) — alongside the resolved session facts a frontend needs to display.
+/// Wires every engine crate into one [`Engine`]. Everything has a sensible default: the current
+/// directory as the root, an in-memory workspace, settings discovered from `~/.riko` and
+/// `<root>/.riko`, and — when no registry is injected — the provider the resolved model needs,
+/// built with its env-resolved API key.
 ///
-/// Both `Arc`s point at the *same* workspace, so a user edit and an agent turn land in one place.
-/// Reach the inner handles with [`workspace`](Self::workspace) and [`agent`](Self::agent); clone
-/// the returned `Arc` to share it with a render loop or an event subscriber.
+/// Inject a [`ProviderRegistry`] via [`providers`](Self::providers) to supply a mock or a custom
+/// provider; otherwise the builder constructs the one the chosen model's API requires and fails
+/// loudly at build time if its key is missing.
 pub struct Engine {
     workspace: Arc<Workspace>,
     agent: Arc<Agent>,
@@ -119,7 +120,9 @@ impl EngineBuilder {
         self
     }
 
-    /// The provider registry the agent dispatches through. Required.
+    /// The provider registry the agent dispatches through. Optional: when unset, the builder
+    /// constructs the provider the resolved model needs (resolving its API key from the
+    /// environment). Inject one to use a mock or a custom provider.
     pub fn providers(mut self, providers: Arc<ProviderRegistry>) -> Self {
         self.providers = Some(providers);
         self
@@ -137,10 +140,16 @@ impl EngineBuilder {
     /// deferring it to the first turn.
     pub fn build(self) -> Result<Engine> {
         let root = Self::resolve_root(self.workspace_root)?;
-        let providers = self.providers.ok_or_else(|| Self::missing("providers"))?;
         let settings = Self::load_settings(self.settings, &root)?;
         let model = ModelRoute::resolve(self.model.as_deref(), &settings)?;
-        Self::ensure_provider_available(&providers, &model)?;
+
+        let providers = match self.providers {
+            Some(injected) => {
+                Self::ensure_provider_available(&injected, &model)?;
+                injected
+            }
+            None => Arc::new(default_registry(&model)?),
+        };
 
         let tools = Arc::new(Self::default_tools());
         let skill_roots = self.skill_roots.unwrap_or_else(|| Self::default_skill_roots(&root));
@@ -241,8 +250,47 @@ impl EngineBuilder {
         }
         Ok((Workspace::open(path)?, fresh))
     }
+}
 
-    fn missing(field: &str) -> RikoError {
-        RikoError::Config(format!("engine builder missing required field: {field}"))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use riko_llm::{Api, mock::MockProvider};
+
+    fn registry_for(api: Api) -> Arc<ProviderRegistry> {
+        let mut registry = ProviderRegistry::new();
+        registry.register(MockProvider::for_api(api));
+        Arc::new(registry)
+    }
+
+    #[test]
+    fn auto_builds_a_provider_when_none_is_injected() {
+        // An Ollama model needs no API key, so the builder can construct its provider with no
+        // registry injected and no environment set up — exercising the auto-build path.
+        let engine = Engine::builder()
+            .workspace_root(".")
+            .model("ollama:llama")
+            .settings(LoadOptions::default())
+            .skill_roots(Vec::new())
+            .build()
+            .unwrap();
+        assert_eq!(engine.model().api, Api::OpenAiCompletions);
+    }
+
+    #[test]
+    fn build_rejects_a_registry_that_cannot_serve_the_model() {
+        // The model routes to Anthropic, but only an OpenAI provider is registered.
+        let err = Engine::builder()
+            .workspace_root(".")
+            .model("anthropic:claude")
+            .settings(LoadOptions::default())
+            .providers(registry_for(Api::OpenAiCompletions))
+            .build()
+            .err()
+            .unwrap();
+        assert!(matches!(err, RikoError::Config(_)));
+        let message = err.to_string();
+        assert!(message.contains("no provider registered"));
+        assert!(message.contains("anthropic-messages"));
     }
 }

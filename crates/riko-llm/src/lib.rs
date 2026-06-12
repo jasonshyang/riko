@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod event;
 pub mod model;
 pub mod options;
@@ -9,6 +10,7 @@ pub mod registry;
 mod sse;
 
 pub use api::*;
+pub use auth::*;
 pub use event::*;
 pub use model::*;
 pub use options::*;
