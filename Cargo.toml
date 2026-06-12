@@ -19,6 +19,9 @@ riko-config = { path = "crates/riko-config" }
 riko-agent = { path = "crates/riko-agent" }
 riko-engine = { path = "crates/riko-engine" }
 
+# Http
+reqwest = { version = "0.13.3", features = ["json", "stream", "rustls"], default-features = false }
+
 # Async
 futures = "0.3.32"
 async-stream = "0.3.6"

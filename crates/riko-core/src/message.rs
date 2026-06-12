@@ -10,6 +10,7 @@ use crate::{Content, ModelRef, ToolCallId};
 /// on the item that wraps the turn, not here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(flatten)]
     pub role: Role,
     pub content: Vec<Content>,
 }
@@ -20,13 +21,24 @@ pub struct Message {
 /// prompt, notes, summaries, loaded files) is a distinct workspace item kind, not a role,
 /// so rendering never has to strip anything out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
 pub enum Role {
     /// Human input.
     User,
     /// Model output, with the model that produced it and per-turn bookkeeping.
-    Assistant { model: ModelRef, usage: Usage, stop: StopReason },
+    Assistant {
+        model: ModelRef,
+        #[serde(default)]
+        usage: Usage,
+        stop: StopReason,
+    },
     /// Result of a tool execution, paired with the call that triggered it.
-    ToolResult { call_id: ToolCallId, tool: SmolStr, is_error: bool },
+    ToolResult {
+        call_id: ToolCallId,
+        tool: SmolStr,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_error: bool,
+    },
 }
 
 /// Token counts a provider reports for a single assistant turn.
@@ -60,6 +72,7 @@ impl Usage {
 
 /// Why an assistant turn stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// Model produced an end-of-turn signal naturally.
     Stop,

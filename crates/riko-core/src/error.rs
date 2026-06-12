@@ -33,4 +33,8 @@ pub enum RikoError {
     /// The operation observed its cancellation token and stopped.
     #[error("cancelled")]
     Cancelled,
+
+    /// LLM provider rejected the request or returned an error stream.
+    #[error("provider error: {0}")]
+    Provider(String),
 }

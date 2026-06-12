@@ -6,6 +6,8 @@ pub mod provider;
 pub mod providers;
 pub mod registry;
 
+mod sse;
+
 pub use api::*;
 pub use event::*;
 pub use model::*;

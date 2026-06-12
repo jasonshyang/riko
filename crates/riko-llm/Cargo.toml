@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+riko-utils.workspace = true
 riko-core.workspace = true
 smol_str.workspace = true
 serde.workspace = true
@@ -13,3 +14,5 @@ futures.workspace = true
 async-stream.workspace = true
 parking_lot.workspace = true
 tokio.workspace = true
+bytes.workspace = true
+reqwest.workspace = true
