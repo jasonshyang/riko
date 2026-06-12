@@ -629,10 +629,10 @@ mod tests {
 
     #[test]
     fn missing_env_var_for_required_key_fails_loudly() {
-        let model = sample_model(Some("RICO_NEVER_SET_TEST_VAR_XYZ"));
+        let model = sample_model(Some("RIKO_NEVER_SET_TEST_VAR_XYZ"));
         let err = resolve_api_key_for(&model).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("RICO_NEVER_SET_TEST_VAR_XYZ"));
+        assert!(msg.contains("RIKO_NEVER_SET_TEST_VAR_XYZ"));
     }
 
     #[test]

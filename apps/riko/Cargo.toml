@@ -4,3 +4,18 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+riko-engine.workspace = true
+riko-core.workspace = true
+riko-context.workspace = true
+riko-agent.workspace = true
+riko-llm.workspace = true
+riko-config.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+ratatui.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -82,10 +82,10 @@ mod tests {
 
     #[test]
     fn anthropic_without_its_key_fails_loudly() {
-        let spec = model(Api::AnthropicMessages, Some("RICO_ENGINE_GUARANTEED_UNSET_KEY_X9F2"));
+        let spec = model(Api::AnthropicMessages, Some("RIKO_ENGINE_GUARANTEED_UNSET_KEY_X9F2"));
         let err = default_registry(&spec).err().unwrap();
         assert!(matches!(err, RikoError::Config(_)));
-        assert!(err.to_string().contains("RICO_ENGINE_GUARANTEED_UNSET_KEY_X9F2"));
+        assert!(err.to_string().contains("RIKO_ENGINE_GUARANTEED_UNSET_KEY_X9F2"));
     }
 
     #[test]

@@ -52,10 +52,10 @@ mod tests {
 
     #[test]
     fn missing_env_var_fails_loudly() {
-        let spec = AuthSpec::Env { var: "RICO_DEFINITELY_UNSET_KEY_X9F2".into() };
+        let spec = AuthSpec::Env { var: "RIKO_DEFINITELY_UNSET_KEY_X9F2".into() };
         let err = resolve_api_key(&spec).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("RICO_DEFINITELY_UNSET_KEY_X9F2"));
+        assert!(msg.contains("RIKO_DEFINITELY_UNSET_KEY_X9F2"));
         assert!(msg.contains("not set"));
     }
 
